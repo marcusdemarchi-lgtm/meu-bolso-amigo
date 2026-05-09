@@ -1,33 +1,29 @@
 import { useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
 import type { Transaction } from "@/lib/finance";
-
-const STORAGE_KEY = "finflow.transactions.v1";
-
-function read(): Transaction[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as Transaction[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
+import { apiCreate, apiDelete, apiList } from "@/lib/api";
 
 export function useTransactions() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
-    setTransactions(read());
-    setHydrated(true);
+    let cancelled = false;
+    apiList()
+      .then((data) => {
+        if (!cancelled) setTransactions(data);
+      })
+      .catch((e) => {
+        console.error(e);
+        toast.error("Não foi possível conectar à API");
+      })
+      .finally(() => {
+        if (!cancelled) setHydrated(true);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
-
-  useEffect(() => {
-    if (!hydrated) return;
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(transactions));
-  }, [transactions, hydrated]);
 
   const add = useCallback((tx: Omit<Transaction, "id" | "createdAt">) => {
     const full: Transaction = {
@@ -36,10 +32,24 @@ export function useTransactions() {
       createdAt: Date.now(),
     };
     setTransactions((prev) => [full, ...prev]);
+    apiCreate(full).catch((e) => {
+      console.error(e);
+      toast.error("Erro ao salvar — revertendo");
+      setTransactions((prev) => prev.filter((t) => t.id !== full.id));
+    });
   }, []);
 
   const remove = useCallback((id: string) => {
-    setTransactions((prev) => prev.filter((t) => t.id !== id));
+    const prevSnapshot = (curr: Transaction[]) => curr;
+    setTransactions((prev) => {
+      const snap = prevSnapshot(prev);
+      apiDelete(id).catch((e) => {
+        console.error(e);
+        toast.error("Erro ao excluir — revertendo");
+        setTransactions(snap);
+      });
+      return prev.filter((t) => t.id !== id);
+    });
   }, []);
 
   const clear = useCallback(() => setTransactions([]), []);
